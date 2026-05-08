@@ -1,27 +1,18 @@
-from typing import List, Tuple, Type, Any, Dict, Optional
+from typing import Any, ClassVar
 from datetime import datetime, timedelta
 import aiohttp
 import json
 import os
 
-from src.plugin_system import (
-    BasePlugin,
-    register_plugin,
-    BaseAction,
-    BaseCommand,
-    BaseTool,
-    BaseEventHandler,
-    ComponentInfo,
-    ActionActivationType,
-    ConfigField,
-    EventType,
-    MaiMessages,
-    CustomEventHandlerResult,
+from maibot_sdk import (
+    MaiBotPlugin,
+    Tool,
+    Command,
+    PluginConfigBase,
+    Field,
 )
-from src.common.logger import get_logger
-from src.plugin_system.apis import llm_api
+from maibot_sdk.types import ToolParameterInfo, ToolParamType
 
-logger = get_logger("date_aware_plugin")
 
 # LLM 扩展提示词（无换行）
 LLM_EXPAND_PROMPT = (
@@ -64,7 +55,7 @@ def format_date_short(date: datetime) -> str:
     return f"{date.month}月{date.day}日"
 
 
-def get_holiday_name(date_str: str, holiday_map: Dict[str, Any]) -> str:
+def get_holiday_name(date_str: str, holiday_map: dict[str, Any]) -> str:
     """从缓存中获取节假日名称"""
     if date_str in holiday_map:
         info = holiday_map[date_str]
@@ -78,7 +69,7 @@ def get_holiday_name(date_str: str, holiday_map: Dict[str, Any]) -> str:
     return FIXED_HOLIDAYS.get(month_day, "")
 
 
-async def download_holiday_data(year: int) -> Dict[str, Any]:
+async def download_holiday_data(year: int) -> dict[str, Any]:
     """下载指定年份的节假日数据"""
     url = HOLIDAY_URL_TEMPLATE.format(year=year)
     try:
@@ -92,57 +83,55 @@ async def download_holiday_data(year: int) -> Dict[str, Any]:
                         holiday_map[item["date"]] = item
                     return holiday_map
                 else:
-                    logger.warning(f"下载节假日数据失败: {response.status}")
                     return {}
-    except Exception as e:
-        logger.error(f"下载节假日数据出错: {e}")
+    except Exception:
         return {}
 
 
-def load_cached_holiday(year: int) -> Dict[str, Any]:
+def load_cached_holiday(year: int) -> dict[str, Any]:
     """从本地缓存加载节假日数据"""
     cache_file = os.path.join(CACHE_DIR, f"{year}.json")
     if os.path.exists(cache_file):
         try:
             with open(cache_file, "r", encoding="utf-8") as f:
                 return json.load(f)
-        except Exception as e:
-            logger.warning(f"加载缓存节假日数据失败: {e}")
+        except Exception:
+            return {}
     return {}
 
 
-def save_cached_holiday(year: int, data: Dict[str, Any]) -> None:
+def save_cached_holiday(year: int, data: dict[str, Any]) -> None:
     """保存节假日数据到本地缓存"""
     cache_file = os.path.join(CACHE_DIR, f"{year}.json")
     try:
         os.makedirs(CACHE_DIR, exist_ok=True)
         with open(cache_file, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        logger.warning(f"保存节假日数据失败: {e}")
+    except Exception:
+        pass
 
 
-async def get_holiday_map(year: int) -> Dict[str, Any]:
+async def get_holiday_map(year: int) -> dict[str, Any]:
     """获取节假日数据（优先本地缓存，无则下载）"""
     # 先尝试加载缓存
     holiday_map = load_cached_holiday(year)
     if holiday_map:
         return holiday_map
-    
+
     # 下载并缓存
     holiday_map = await download_holiday_data(year)
     if holiday_map:
         save_cached_holiday(year, holiday_map)
-    
+
     return holiday_map
 
 
-def get_three_days_raw_info() -> Dict[str, Dict[str, str]]:
+def get_three_days_raw_info() -> dict[str, dict[str, str]]:
     """获取昨天、今天、明天的基础信息（不含节假日）"""
     today = datetime.now()
     yesterday = today - timedelta(days=1)
     tomorrow = today + timedelta(days=1)
-    
+
     return {
         "yesterday": {
             "date_str": yesterday.strftime("%Y-%m-%d"),
@@ -166,13 +155,13 @@ async def get_three_days_info() -> str:
     """获取三天完整信息，格式化为字符串"""
     today = datetime.now()
     year = today.year
-    
+
     # 获取节假日数据
     holiday_map = await get_holiday_map(year)
-    
+
     # 获取基础信息
     base_info = get_three_days_raw_info()
-    
+
     # 构建输出（竖线分隔格式，更清晰）
     lines = []
     for day_name, info in [("昨天", base_info["yesterday"]), ("今天", base_info["today"]), ("明天", base_info["tomorrow"])]:
@@ -183,40 +172,41 @@ async def get_three_days_info() -> str:
         else:
             line = f"{day_name} | {info['date_short']} {info['weekday']}"
         lines.append(line)
-    
+
     return "\n".join(lines)
 
 
-async def expand_with_llm(raw_info: str) -> str:
-    """使用 LLM 扩展日期信息"""
-    try:
-        prompt = LLM_EXPAND_PROMPT.format(raw_info=raw_info)
-        models = llm_api.get_available_models()
-        chat_model_config = models.get("replyer")
-        if not chat_model_config:
-            logger.warning("无可用的 LLM 模型")
-            return raw_info
-        
-        success, result, _, _ = await llm_api.generate_with_model(
-            prompt, model_config=chat_model_config, request_type="date_expand"
-        )
-        if success and result:
-            return result.strip()
-        return raw_info
-    except Exception as e:
-        logger.error(f"LLM 扩展日期信息失败: {e}")
-        return raw_info
+class DateAwarePluginConfig(PluginConfigBase):
+    """日期感知插件配置"""
+    enabled: bool = Field(default=True, description="是否启用插件")
+    enable_llm_expand: bool = Field(default=False, description="是否启用 LLM 扩展日期信息")
+    llm_model: str = Field(default="replyer", description="使用的模型名称")
 
 
-class DateTool(BaseTool):
-    """获取日期信息的工具"""
+class DateAwarePlugin(MaiBotPlugin):
+    """日期感知插件 - 让 Bot 能够感知并展示日期信息"""
 
-    name = "get_date_info"
-    description = "获取昨天、今天、明天的日期、星期几和节假日信息。LLM 可根据需要调用此工具。"
-    parameters = []
-    available_for_llm = True
+    config_model = DateAwarePluginConfig
 
-    async def execute(self, function_args: dict[str, Any]) -> dict[str, Any]:
+    async def on_load(self) -> None:
+        """插件加载时初始化"""
+        self.ctx.logger.info("日期感知插件已加载")
+
+    async def on_unload(self) -> None:
+        """插件卸载时清理资源"""
+        self.ctx.logger.info("日期感知插件正在卸载")
+
+    async def on_config_update(self, scope: str, config_data: dict[str, Any], version: str) -> None:
+        """处理配置热更新"""
+        if scope == "self":
+            self.ctx.logger.info("插件配置已更新: version=%s", version)
+
+    @Tool(
+        "get_date_info",
+        brief_description="获取昨天、今天、明天的日期、星期几和节假日信息",
+        detailed_description="获取日期信息工具。LLM 可根据需要调用此工具来获取当前日期上下文。",
+    )
+    async def handle_get_date_info(self, **kwargs) -> dict[str, Any]:
         """执行获取日期信息"""
         try:
             info = await get_three_days_info()
@@ -225,153 +215,40 @@ class DateTool(BaseTool):
                 "description": "日期信息已获取",
             }
         except Exception as e:
-            logger.error(f"获取日期信息失败: {e}")
+            self.ctx.logger.error(f"获取日期信息失败: {e}")
             return {"content": "", "error": str(e)}
 
-
-class TodayInfoAction(BaseAction):
-    """自动注入日期信息的 Action"""
-
-    action_name = "inject_date_context"
-    action_description = "自动获取并注入日期信息到对话上下文中，让 Bot 感知当前日期"
-    activation_type = ActionActivationType.ALWAYS
-
-    action_parameters = {}
-    action_require = ["每次对话前触发", "用于让 Bot 感知当前日期"]
-    associated_types = ["text"]
-
-    async def execute(self) -> Tuple[bool, str]:
-        """执行注入日期信息"""
-        try:
-            # 获取原始日期信息
-            raw_info = await get_three_days_info()
-
-            # 检查是否需要 LLM 扩展
-            if self.get_config("date.enable_llm_expand", False):
-                expanded_info = await expand_with_llm(raw_info)
-            else:
-                expanded_info = raw_info
-
-            # 发送到上下文（修改系统提示词）
-            # 注意：这里通过发送消息的方式间接实现，因为 Action 组件的限制
-            await self.send_text(f"[日期信息注入]{expanded_info}[/日期信息注入]")
-
-            return True, "日期信息已注入"
-        except Exception as e:
-            logger.error(f"注入日期信息失败: {e}")
-            return False, f"注入失败: {e}"
-
-
-class DateInjectEventHandler(BaseEventHandler):
-    """日期注入事件处理器 - 在 LLM 调用前自动注入日期信息到 prompt"""
-
-    event_type = EventType.POST_LLM
-    handler_name = "date_inject_handler"
-    handler_description = "在 LLM 调用前自动注入日期信息到 prompt"
-    weight = 10
-    intercept_message = True
-
-    async def execute(
-        self, message: MaiMessages | None
-    ) -> Tuple[bool, bool, Optional[str], Optional[CustomEventHandlerResult], Optional[MaiMessages]]:
-        """执行日期注入
-
-        在 LLM 调用前，将日期信息注入到 prompt 中，让 Bot 感知当前日期。
-        这是一个"软注入"方式 - 将日期信息作为上下文附加，不强制 Bot 使用。
-        """
-        if not message or not message.llm_prompt:
-            return True, True, None, None, None
-
-        try:
-            # 获取日期信息
-            date_info = await get_three_days_info()
-
-            # 构建注入内容
-            inject_content = f"\n\n【日期】\n{date_info}\n\n提示：以上是当前日期信息，可以根据需要融入回复中。"
-
-            # 直接修改 LLM prompt（软注入方式）
-            new_prompt = message.llm_prompt + inject_content
-            message.modify_llm_prompt(new_prompt, suppress_warning=True)
-
-            logger.debug(f"日期信息已注入到 prompt")
-            return True, True, None, None, message
-
-        except Exception as e:
-            logger.error(f"日期注入失败: {e}")
-            return True, True, None, None, None
-
-
-class DateCommand(BaseCommand):
-    """手动查询日期命令"""
-
-    command_name = "date_query"
-    command_description = "查询昨天、今天、明天的日期信息，包括星期几和节假日"
-    command_pattern = r"^/date$"
-
-    async def execute(self) -> Tuple[bool, str, bool]:
+    @Command("date", pattern=r"^/date$")
+    async def handle_date_query(self, **kwargs) -> tuple[bool, str, int]:
         """执行日期查询"""
         try:
+            stream_id = kwargs.get("stream_id", "")
             # 获取原始日期信息
             raw_info = await get_three_days_info()
-            
+
             # 检查是否需要 LLM 扩展
-            if self.get_config("date.enable_llm_expand", False):
-                expanded_info = await expand_with_llm(raw_info)
-                message = expanded_info
+            if self.config.enable_llm_expand:
+                try:
+                    prompt = LLM_EXPAND_PROMPT.format(raw_info=raw_info)
+                    result = await self.ctx.llm.generate_text(prompt)
+                    if result:
+                        message = result.strip()
+                    else:
+                        message = raw_info
+                except Exception:
+                    message = raw_info
             else:
                 message = raw_info
-            
-            await self.send_text(message)
-            
-            return True, f"显示了日期信息: {message}", True
+
+            await self.ctx.send.text(message, stream_id)
+
+            return True, f"显示了日期信息: {message}", 2
         except Exception as e:
-            logger.error(f"日期查询失败: {e}")
-            await self.send_text("查询日期信息失败，请稍后再试")
-            return True, f"查询失败: {e}", True
+            self.ctx.logger.error(f"日期查询失败: {e}")
+            stream_id = kwargs.get("stream_id", "")
+            await self.ctx.send.text("查询日期信息失败，请稍后再试", stream_id)
+            return True, f"查询失败: {e}", 1
 
 
-@register_plugin
-class DateAwarePlugin(BasePlugin):
-    """日期感知插件 - 让 Bot 能够感知并展示日期信息"""
-
-    plugin_name: str = "date_aware_plugin"
-    enable_plugin: bool = True
-    dependencies: list[str] = []
-    python_dependencies: list[str] = []
-    config_file_name: str = "config.toml"
-
-    config_section_descriptions = {
-        "plugin": "插件配置",
-        "date": "日期功能配置",
-    }
-
-    config_schema: dict = {
-        "plugin": {
-            "enabled": ConfigField(type=bool, default=True, description="是否启用插件"),
-            "config_version": ConfigField(type=str, default="1.0.0", description="配置文件版本"),
-        },
-        "date": {
-            "enable_llm_expand": ConfigField(type=bool, default=False, description="是否启用 LLM 扩展日期信息"),
-            "llm_model": ConfigField(type=str, default="replyer", description="使用的模型名称"),
-            "enable_action": ConfigField(type=bool, default=True, description="是否启用自动注入 Action"),
-        },
-    }
-
-    def get_plugin_components(self) -> List[Tuple[ComponentInfo, Type]]:
-        """返回插件包含的组件列表"""
-        components = []
-
-        # 添加 Tool 组件
-        components.append((DateTool.get_tool_info(), DateTool))
-
-        # 根据配置添加 Action 组件
-        if self.get_config("date.enable_action", True):
-            components.append((TodayInfoAction.get_action_info(), TodayInfoAction))
-
-        # 添加 EventHandler 组件（自动注入日期到 prompt）
-        components.append((DateInjectEventHandler.get_handler_info(), DateInjectEventHandler))
-
-        # 添加 Command 组件
-        components.append((DateCommand.get_command_info(), DateCommand))
-
-        return components
+def create_plugin():
+    return DateAwarePlugin()

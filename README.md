@@ -1,6 +1,17 @@
-# 日期感知插件 v1.0.0
+# 日期感知插件 v2.0.0
 
 让麦麦能够更准确感知节假日信息的插件
+
+## 关于此分支
+
+这是一个适配新版 MaiBot SDK 的分支版本。
+
+- **源项目**: [heitiehu-beep/date_aware_plugin](https://github.com/heitiehu-beep/date_aware_plugin)
+- **原作者**: [heitiehu-beep](https://github.com/heitiehu-beep)
+- **分支维护者**: [small_sunshine](https://github.com/MCYXG233)
+- **新仓库**: [MCYXG233/date_aware_plugin_New](https://github.com/MCYXG233/date_aware_plugin_New)
+
+本分支旨在将原插件适配到 MaiBot v1.0.0+ 的新 SDK 架构。
 
 ## 功能特性
 
@@ -39,14 +50,11 @@ enabled = true          # 是否启用插件
 [date]
 enable_llm_expand = false   # 是否启用 LLM 扩展日期信息
 llm_model = "replyer"       # 使用的模型名称
-enable_action = true        # 是否启用自动注入 Action
 ```
 
 ## 工作原理
 
-插件使用 `POST_LLM` 事件处理器，在 LLM 调用前自动将日期信息注入到 prompt 中。
-
-这种"软注入"方式不会强制 Bot 使用日期信息，而是作为上下文供参考。
+插件使用 `@Tool` 和 `@Command` 装饰器声明组件，通过 `PluginContext` 与 MaiBot 主进程通信。
 
 ## 节假日数据
 
@@ -71,13 +79,12 @@ enable_action = true        # 是否启用自动注入 Action
 | 组件类型 | 名称 | 说明 |
 |---------|------|------|
 | Tool | get_date_info | 获取日期信息的工具 |
-| EventHandler | date_inject_handler | 自动注入日期到 prompt |
-| Command | date_query | /date 命令处理器 |
-| Action | inject_date_context | 自动注入日期信息（已保留兼容） |
+| Command | date | /date 命令处理器 |
 
 ## 作者
 
-heitiehu
+- 原作者: [heitiehu-beep](https://github.com/heitiehu-beep)
+- 分支维护者: [small_sunshine](https://github.com/MCYXG233)
 
 ## 许可证
 
