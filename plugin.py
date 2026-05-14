@@ -176,9 +176,15 @@ async def get_three_days_info() -> str:
     return "\n".join(lines)
 
 
+class PluginSection(PluginConfigBase):
+    """插件元信息"""
+    config_version: str = Field(default="2.0.0", description="配置版本号")
+    enabled: bool = Field(default=True, description="是否启用插件")
+
+
 class DateAwarePluginConfig(PluginConfigBase):
     """日期感知插件配置"""
-    enabled: bool = Field(default=True, description="是否启用插件")
+    plugin: PluginSection = Field(default_factory=PluginSection)
     enable_llm_expand: bool = Field(default=False, description="是否启用 LLM 扩展日期信息")
     llm_model: str = Field(default="replyer", description="使用的模型名称")
 
